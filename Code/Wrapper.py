@@ -46,10 +46,13 @@ def main():
 
     # Initialize all of the images that will be used for calibration, they are in dir = "/../Calib_Imgs"   
     imgs = initialize_calib(images_dir)
-    for i in imgs:
-        cv2.imshow("gray", i)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    for im in imgs:
+        ret, corners = cv2.findChessboardCorners(im, (9,6), None)
+        if ret == True:
+            with_corners = cv2.drawChessboardCorners(im, (9,6), corners, ret)
+            cv2.imshow("cornered", with_corners)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
     # Solve for approximate K (camera calibration matrix)
     # Section 3.1 of paper
