@@ -6,6 +6,10 @@ import os
 import cv2
 import matplotlib.pyplot as plt
 
+sq_sz = 21.5
+h = 6
+w = 9
+
 """
 This function will load the 13 data images
 @param images_dir is a string containing the path to the directory for the calibration images
@@ -26,7 +30,7 @@ def initialize_calib(images_dir=str):
 """
 get_corners takes a list of images and gets the corners
 """
-def get_corners(images: list[np.ndarray], h, w):
+def get_corners(images: list[np.ndarray]):
     corners_list2D = []
     corners_list = []
 
@@ -52,7 +56,7 @@ def get_corners(images: list[np.ndarray], h, w):
             print("Proper corners with specified grid shape have not been identified")
             continue
 
-    return corners_list2D, corners_list
+    return corners_list
 
 """
 Helper function to get the vij used for the b calculation
@@ -68,97 +72,14 @@ def get_vij(hi:np.ndarray, hj:np.ndarray) -> np.ndarray:
     return vij
 
 
-# LLM Function to Visualize the corner alignments
-def visualize_corners_alignment(img, corners2D, reference2D, H=None, show=True):
-    """
-    Visualize detected corners vs. reference points.
-    
-    Parameters:
-        img : np.ndarray
-            The original grayscale image
-        corners2D : np.ndarray, shape (N,2)
-            Detected chessboard corners from OpenCV
-        reference2D : np.ndarray, shape (N,2)
-            Reference world coordinates of corners
-        H : np.ndarray, optional
-            Homography to project reference points into image
-        show : bool
-            Whether to display the figure immediately
-    """
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-    
-    # Draw detected corners in red
-    for pt in corners2D:
-        x, y = int(pt[0]), int(pt[1])
-        cv2.circle(img_rgb, (x, y), 5, (255,0,0), -1)
-    
-    # Project reference points if H is provided
-    if H is not None:
-        ref_h = np.hstack([reference2D, np.ones((reference2D.shape[0],1))])
-        proj_ref = (H @ ref_h.T).T
-        proj_ref /= proj_ref[:,2].reshape(-1,1)
-    else:
-        proj_ref = reference2D
-    
-    # Draw reference points in green
-    for pt in proj_ref:
-        x, y = int(pt[0]), int(pt[1])
-        cv2.circle(img_rgb, (x, y), 5, (0,255,0), -1)
-    
-    if show:
-        plt.figure(figsize=(10,8))
-        plt.imshow(img_rgb[..., ::-1])  # convert BGR -> RGB for matplotlib
-        plt.title("Red: detected corners, Green: projected reference corners")
-        plt.axis("off")
-        plt.show()
-    
-    return img_rgb
-
-def geometric_error
-
-def main():
-    # get path to current directory
-    curr_dir = os.path.dirname(os.path.abspath(__file__))
-    parent_dir = os.path.dirname(curr_dir)
-
-    # Arguments
-    parser = ArgumentParser()
-    parser.add_argument(
-        "-i", "--dir", type=str, default=f"{parent_dir}/Calib_Imgs/", help="Directory with all the images for calibration are"
-    )
-    args = parser.parse_args()
-    images_dir = args.dir
-
-
-    # reference2D
-    sq_sz = 21.5
-    h = 6
-    w = 9
-    grid_shape = (h, w)
-
-    reference = np.zeros((h, w, 2), dtype=np.float32)
-    for i in range(h):
-        for j in range(w):
-            reference[i][j][0] = sq_sz * j # x 
-            reference[i][j][1] = sq_sz * i # y 
-
-    # get all of the points in the grid and then extract the four corners, those will be for homography calculation
-    # reshape so that it is an array of arrays
-    reference2D = reference.reshape(-1, 2)
-    four_corners_world = np.array([reference[0][0], reference[0][w-1], reference[h-1][0], reference[h-1][w-1]]).reshape(-1, 2)
-
-    # Initialize all of the images that will be used for calibration, they are in dir = "/../Calib_Imgs" and get the points in the grid
-    imgs = initialize_calib(images_dir)
-
-    # iterate through all the images, get all of the chessboard corners and then extract the four actual corners to compare with the reference
-    homographies = []
-    corners2D, corners = get_corners(imgs, h, w)
-
-
+def get_intrinsic(corners_image, corners_world):
     # Solve for approximate K (camera calibration matrix)
     # Section 3.1 of paper
     # Use cv2.findChessboardCorners to find the corners of the checker baord with appropiate parameters
-    for crn in corners:
+    four_corners_world = np.array([corners_world[0][0], corners_world[0][w-1], corners_world[h-1][0], corners_world[h-1][w-1]]).reshape(-1, 2)
+    homographies = []
+
+    for crn in corners_image:
         four_corners_image = np.array([crn[0][0], crn[0][w-1], crn[h-1][0], crn[h-1][w-1]]).reshape(-1, 2)
 
         # homogrpahy by comparing both corners in the world and the image
@@ -219,19 +140,22 @@ def main():
         [0, fy, cy],
         [0, 0, 1]
     ])
-
     
-    # Approximate R (rotation matrix) or t (translation of the camera)
-    # section 3.1
-    # neglect conversion from normal matrix to rotation matrix
+    return K, homographies, l
 
-   # imshow rectified image
+"""
+Approximate R (rotation matrix) or t (translation of the camera)
+section 3.1
+neglect conversion from normal matrix to rotation matrix
+"""
+def get_extrinsics(homographies, imgs, K, l):
+    # imshow rectified image
     pixels_per_mm = 5  # choose something reasonable
     rect_w = int((w - 1) * sq_sz * pixels_per_mm)
     rect_h = int((h - 1) * sq_sz * pixels_per_mm)
     # Translation to properly see the new image
     T = np.array([[1, 0, 200],[0, 1, 150],[0, 0, 1]])
-
+    
     extrinsics = []
     for index, homography in enumerate(homographies):
         h1_2 = homography[:, 0]
@@ -257,20 +181,105 @@ def main():
         cv2.imshow(f"rectification for image {index}", warped)
         cv2.waitKey(0)
         cv2.destroyAllWindows() 
-        
+    
+    return extrinsics
+
+# LLM Function to Visualize the corner alignments
+def visualize_corners_alignment(img, corners2D, reference2D, H=None, show=True):
+    """
+    Visualize detected corners vs. reference points.
+    
+    Parameters:
+        img : np.ndarray
+            The original grayscale image
+        corners2D : np.ndarray, shape (N,2)
+            Detected chessboard corners from OpenCV
+        reference2D : np.ndarray, shape (N,2)
+            Reference world coordinates of corners
+        H : np.ndarray, optional
+            Homography to project reference points into image
+        show : bool
+            Whether to display the figure immediately
+    """
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    
+    # Draw detected corners in red
+    for pt in corners2D:
+        x, y = int(pt[0]), int(pt[1])
+        cv2.circle(img_rgb, (x, y), 5, (255,0,0), -1)
+    
+    # Project reference points if H is provided
+    if H is not None:
+        ref_h = np.hstack([reference2D, np.ones((reference2D.shape[0],1))])
+        proj_ref = (H @ ref_h.T).T
+        proj_ref /= proj_ref[:,2].reshape(-1,1)
+    else:
+        proj_ref = reference2D
+    
+    # Draw reference points in green
+    for pt in proj_ref:
+        x, y = int(pt[0]), int(pt[1])
+        cv2.circle(img_rgb, (x, y), 5, (0,255,0), -1)
+    
+    if show:
+        plt.figure(figsize=(10,8))
+        plt.imshow(img_rgb[..., ::-1])  # convert BGR -> RGB for matplotlib
+        plt.title("Red: detected corners, Green: projected reference corners")
+        plt.axis("off")
+        plt.show()
+    
+    return img_rgb
+
+
+def main():
+    # get path to current directory
+    curr_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(curr_dir)
+
+    # Arguments
+    parser = ArgumentParser()
+    parser.add_argument(
+        "-i", "--dir", type=str, default=f"{parent_dir}/Calib_Imgs/", help="Directory with all the images for calibration are"
+    )
+    args = parser.parse_args()
+    images_dir = args.dir
+
+
+    reference = np.zeros((h, w, 2), dtype=np.float32)
+    for i in range(h):
+        for j in range(w):
+            reference[i][j][0] = sq_sz * j # x 
+            reference[i][j][1] = sq_sz * i # y 
+
+    # Initialize all of the images that will be used for calibration, they are in dir = "/../Calib_Imgs" and get the points in the grid
+    imgs = initialize_calib(images_dir)
+
+    # iterate through all the images, get all of the chessboard corners and then extract the four actual corners to compare with the reference
+    corners = get_corners(imgs)
+
+    K, homographies, l = get_intrinsic(corners, reference)
+
+    extrinsics = get_extrinsics(homographies, imgs, K, l)
 
     # Approximate distortion k = [k1, k2]
     # k = [0, 0] is a good approximation for right now
-    k = np.transpose(np.array([0, 0]))
+    k1 = 0
+    k2 = 0
+    k = np.transpose(np.array([k1, k2]))
 
     # Non-Linear Geometric Error Minimization
     # ∑i=1N∑j=1M||xi,j−x̂ i,j(K,Ri,ti,Xj,k)||
     # use scipy.optimize to minimize the function
     # section 3.3
+    # rotate the real "world" points into the camera's orientation
+    
+    # pack all of the parameters into one vector
+    # Global ones: fx, fy, cx, cy, k1, k2
+    # Local ones: r11, r12, r13, t11, t12, t13, r21, r22, r23, t21, t22, t23
+    # Compute reprojection errors
 
-
-
-
+    # input_vector = [K, R, k]
+    # make a function that takes world points and puts them onto every image
 
 
 if __name__ == "__main__":
