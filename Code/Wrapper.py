@@ -44,10 +44,10 @@ def get_corners(images: list[np.ndarray], h, w):
 
             
             # # Visualize Corners
-            with_corners = cv2.drawChessboardCorners(im, (w, h), corners_original, ret)
-            cv2.imshow("cornered", with_corners)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
+            # with_corners = cv2.drawChessboardCorners(im, (w, h), corners_original, ret)
+            # cv2.imshow("cornered", with_corners)
+            # cv2.waitKey(0)
+            # cv2.destroyAllWindows()
         else:
             print("Proper corners with specified grid shape have not been identified")
             continue
@@ -114,6 +114,7 @@ def visualize_corners_alignment(img, corners2D, reference2D, H=None, show=True):
     
     return img_rgb
 
+def geometric_error
 
 def main():
     # get path to current directory
@@ -154,6 +155,9 @@ def main():
     corners2D, corners = get_corners(imgs, h, w)
 
 
+    # Solve for approximate K (camera calibration matrix)
+    # Section 3.1 of paper
+    # Use cv2.findChessboardCorners to find the corners of the checker baord with appropiate parameters
     for crn in corners:
         four_corners_image = np.array([crn[0][0], crn[0][w-1], crn[h-1][0], crn[h-1][w-1]]).reshape(-1, 2)
 
@@ -161,8 +165,6 @@ def main():
         H, mask = cv2.findHomography(four_corners_world, four_corners_image)
         homographies.append(H)
 
-
-    # print(homographies[0])
     # Three homographies are enough to get the intrinsic values)
     V_rows = []
     for i in range(3):
@@ -188,27 +190,85 @@ def main():
     # b = [B11, B12, B22, B13, B23, B33].T
     U, S, VT = np.linalg.svd(V)
     b = VT[-1]
-    print(b)
+
+    # reconstructed B from b
+    B = np.array([
+        [b[0], b[1], b[3]],
+        [b[1], b[2], b[4]],
+        [b[3], b[4], b[5]]
+    ])
     
+    #construct K from B
+    # From Appendix B of Zhang's paper
+    B11 = B[0][0]
+    B12 = B[0][1]
+    B13 = B[0][2]
+    B22 = B[1][1]
+    B23 = B[1][2]
+    B33 = B[2][2]
+    
+    cy = (B12 * B13 - B11 * B23) / (B11 * B22 - (B12**2))   # v0 in Zhang's paper
+    l = B33 - (B13**2 + cy*(B12 * B13 - B11 * B23)) / B11   # lambda
+    fx = np.sqrt(l / B11)                                   # alpha in Zhang's
+    fy = np.sqrt( l*B11 / (B11 * B22 - (B12**2)))           # Beta in zhangs
+    y = (-B12 * (fx**2) * fy) / l                           # Gamma
+    cx = (y * cy / fy) - (B13 * (fx**2) / l)                # u0 in Zhang's paper
+    
+    K = np.array([
+        [fx, y, cx],
+        [0, fy, cy],
+        [0, 0, 1]
+    ])
 
-
-
-    # Solve for approximate K (camera calibration matrix)
-    # Section 3.1 of paper
-    # Use cv2.findChessboardCorners to find the corners of the checker baord with appropiate paramet4rs
-
+    
     # Approximate R (rotation matrix) or t (translation of the camera)
     # section 3.1
     # neglect conversion from normal matrix to rotation matrix
 
+   # imshow rectified image
+    pixels_per_mm = 5  # choose something reasonable
+    rect_w = int((w - 1) * sq_sz * pixels_per_mm)
+    rect_h = int((h - 1) * sq_sz * pixels_per_mm)
+    # Translation to properly see the new image
+    T = np.array([[1, 0, 200],[0, 1, 150],[0, 0, 1]])
+
+    extrinsics = []
+    for index, homography in enumerate(homographies):
+        h1_2 = homography[:, 0]
+        h2_2 = homography[:, 1]
+        h3_2 = homography[:, 2]
+
+        r1 = l * np.linalg.inv(K) @ h1_2
+        r2 = l * np.linalg.inv(K) @ h2_2
+        r3 = np.cross(r1, r2)
+        t = l * np.linalg.inv(K) @ h3_2
+
+        # print("r1", r1)
+        # print("r2", r2)
+        # print("r3", r3)
+        # print("t", t)
+        R = np.transpose(np.vstack((r1, r2, r3, t)))
+        # print(R)
+        extrinsics.append(R)
+
+        # Rectification:
+        H_rect = T @ np.linalg.inv(homography)
+        warped = cv2.warpPerspective(imgs[index], H_rect, (rect_w, rect_h))
+        cv2.imshow(f"rectification for image {index}", warped)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows() 
+        
+
     # Approximate distortion k = [k1, k2]
     # k = [0, 0] is a good approximation for right now
-    # k = np.transpose(np.array([0, 0]))
+    k = np.transpose(np.array([0, 0]))
 
     # Non-Linear Geometric Error Minimization
     # ∑i=1N∑j=1M||xi,j−x̂ i,j(K,Ri,ti,Xj,k)||
     # use scipy.optimize to minimize the function
     # section 3.3
+
+
 
 
 
