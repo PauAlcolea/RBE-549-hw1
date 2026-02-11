@@ -377,9 +377,7 @@ def main():
     result = scipy.optimize.least_squares(project_points, 
                                           initial_params, 
                                           args=(world2D, corners2D, True), 
-                                          method="lm",
-                                          ftol=1e-6,        #cost change
-                                          max_nfev=20000)   #maximun number of iterations
+                                          method="lm")
     
     print("\n" + "="*60)
     print("OPTIMIZATION COMPLETE")
