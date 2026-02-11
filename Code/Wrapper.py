@@ -56,7 +56,7 @@ def get_corners(images: list[np.ndarray]):
             print("Proper corners with specified grid shape have not been identified")
             continue
 
-    return corners_list
+    return corners_list2D, corners_list
 
 """
 Helper function to get the vij used for the b calculation
@@ -178,58 +178,49 @@ def get_extrinsics(homographies, imgs, K, l):
         # Rectification:
         H_rect = T @ np.linalg.inv(homography)
         warped = cv2.warpPerspective(imgs[index], H_rect, (rect_w, rect_h))
-        cv2.imshow(f"rectification for image {index}", warped)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows() 
-    
+        # cv2.imshow(f"rectification for image {index}", warped)
+        # cv2.waitKey(0)
+        # cv2.destroyAllWindows() 
     return extrinsics
 
-# LLM Function to Visualize the corner alignments
-def visualize_corners_alignment(img, corners2D, reference2D, H=None, show=True):
-    """
-    Visualize detected corners vs. reference points.
-    
-    Parameters:
-        img : np.ndarray
-            The original grayscale image
-        corners2D : np.ndarray, shape (N,2)
-            Detected chessboard corners from OpenCV
-        reference2D : np.ndarray, shape (N,2)
-            Reference world coordinates of corners
-        H : np.ndarray, optional
-            Homography to project reference points into image
-        show : bool
-            Whether to display the figure immediately
-    """
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
-    
-    # Draw detected corners in red
-    for pt in corners2D:
-        x, y = int(pt[0]), int(pt[1])
-        cv2.circle(img_rgb, (x, y), 5, (255,0,0), -1)
-    
-    # Project reference points if H is provided
-    if H is not None:
-        ref_h = np.hstack([reference2D, np.ones((reference2D.shape[0],1))])
-        proj_ref = (H @ ref_h.T).T
-        proj_ref /= proj_ref[:,2].reshape(-1,1)
-    else:
-        proj_ref = reference2D
-    
-    # Draw reference points in green
-    for pt in proj_ref:
-        x, y = int(pt[0]), int(pt[1])
-        cv2.circle(img_rgb, (x, y), 5, (0,255,0), -1)
-    
-    if show:
-        plt.figure(figsize=(10,8))
-        plt.imshow(img_rgb[..., ::-1])  # convert BGR -> RGB for matplotlib
-        plt.title("Red: detected corners, Green: projected reference corners")
-        plt.axis("off")
-        plt.show()
-    
-    return img_rgb
+"""
+This function is supposed to convert the world points into each of the images coordinates
+@param corners_image
+@param corners_world
+@return corners in the image
+"""
+def project_points(corners_world, K, extrinsics, k):
+    # make the points in 3d to add the z
+    world_points_3d = np.column_stack([corners_world, np.zeros(len(corners_world))])
+    world_in_image = []
+    for Rt in extrinsics:
+        R = Rt[:,0:3]
+        t = Rt[:, -1]
 
+        projected_points = np.empty((len(corners_world), 2))
+
+        for ind, point3d in enumerate(world_points_3d):
+            # get point in camera view
+            cam_point = R @ point3d + t
+            
+            # normalize the 
+            x_norm = cam_point[0] / cam_point[2]
+            y_norm = cam_point[1] / cam_point[2]
+
+            # radial distortion
+            k1, k2 = k[0], k[1]
+            rad = k1 * ((x_norm ** 2) + (y_norm ** 2)) + k2 * (((x_norm ** 2) + (y_norm ** 2))**2)
+            x_dist = x_norm * rad
+            y_dist = y_norm * rad
+
+            # Intrinsic Matrix for the pixel coordinates
+            u = K[0][0] * x_dist + K[0][1] * y_dist + K[0][2]   #u = fx * x_dist + gamma * y_dist + cx
+            v = K[1][1] * y_dist + K[1][2]                      #v = fy * y_dist + cy
+
+            
+            projected_points[ind] = [u, v]
+        world_in_image.append(projected_points)
+    return world_in_image
 
 def main():
     # get path to current directory
@@ -244,8 +235,9 @@ def main():
     args = parser.parse_args()
     images_dir = args.dir
 
-
     reference = np.zeros((h, w, 2), dtype=np.float32)
+    world2D = reference.reshape(-1,2)
+
     for i in range(h):
         for j in range(w):
             reference[i][j][0] = sq_sz * j # x 
@@ -255,7 +247,7 @@ def main():
     imgs = initialize_calib(images_dir)
 
     # iterate through all the images, get all of the chessboard corners and then extract the four actual corners to compare with the reference
-    corners = get_corners(imgs)
+    corners2D, corners = get_corners(imgs)
 
     K, homographies, l = get_intrinsic(corners, reference)
 
@@ -280,7 +272,65 @@ def main():
 
     # input_vector = [K, R, k]
     # make a function that takes world points and puts them onto every image
+    world_in_image = project_points(world2D, K, extrinsics, k)
+    loss_list = [(a - b) for a, b in zip(corners2D, world_in_image)]
+
+
 
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+# # LLM Function to Visualize the corner alignments
+# def visualize_corners_alignment(img, corners2D, reference2D, H=None, show=True):
+#     """
+#     Visualize detected corners vs. reference points.
+    
+#     Parameters:
+#         img : np.ndarray
+#             The original grayscale image
+#         corners2D : np.ndarray, shape (N,2)
+#             Detected chessboard corners from OpenCV
+#         reference2D : np.ndarray, shape (N,2)
+#             Reference world coordinates of corners
+#         H : np.ndarray, optional
+#             Homography to project reference points into image
+#         show : bool
+#             Whether to display the figure immediately
+#     """
+#     img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    
+#     # Draw detected corners in red
+#     for pt in corners2D:
+#         x, y = int(pt[0]), int(pt[1])
+#         cv2.circle(img_rgb, (x, y), 5, (255,0,0), -1)
+    
+#     # Project reference points if H is provided
+#     if H is not None:
+#         ref_h = np.hstack([reference2D, np.ones((reference2D.shape[0],1))])
+#         proj_ref = (H @ ref_h.T).T
+#         proj_ref /= proj_ref[:,2].reshape(-1,1)
+#     else:
+#         proj_ref = reference2D
+    
+#     # Draw reference points in green
+#     for pt in proj_ref:
+#         x, y = int(pt[0]), int(pt[1])
+#         cv2.circle(img_rgb, (x, y), 5, (0,255,0), -1)
+    
+#     if show:
+#         plt.figure(figsize=(10,8))
+#         plt.imshow(img_rgb[..., ::-1])  # convert BGR -> RGB for matplotlib
+#         plt.title("Red: detected corners, Green: projected reference corners")
+#         plt.axis("off")
+#         plt.show()
+    
+#     return img_rgb
