@@ -12,13 +12,15 @@ sq_sz = 21.5
 h = 6
 w = 9
 
+# this is for "visualization" of progress with the optimization
 iteration_count = 0
 
-"""
-This function will load the 13 data images
-@param images_dir is a string containing the path to the directory for the calibration images
-"""
+
 def initialize_calib(images_dir=str):
+    """
+    This function will load the 13 data images
+    @param images_dir is a string containing the path to the directory for the calibration images
+    """
     calib_images = []
 
     # go through all of the files in the calibration directory and return them as a list if they are jpgs
@@ -31,10 +33,11 @@ def initialize_calib(images_dir=str):
     
     return calib_images
 
-"""
-get_corners takes a list of images and gets the corners
-"""
+
 def get_corners(images: list[np.ndarray]):
+    """
+    get_corners takes a list of images and gets the corners
+    """
     corners_list2D = []
     corners_list = []
 
@@ -62,10 +65,11 @@ def get_corners(images: list[np.ndarray]):
 
     return corners_list2D, corners_list
 
-"""
-Helper function to get the vij used for the b calculation
-"""
+
 def get_vij(hi:np.ndarray, hj:np.ndarray) -> np.ndarray:
+    """
+    Helper function to get the vij used for the b calculation
+    """
     vij = np.array([hi[0]*hj[0],
                         hi[0]*hj[1] + hi[1]*hj[0],
                         hi[1]*hj[1],
@@ -77,9 +81,11 @@ def get_vij(hi:np.ndarray, hj:np.ndarray) -> np.ndarray:
 
 
 def get_intrinsic(corners_image, corners_world):
-    # Solve for approximate K (camera calibration matrix)
-    # Section 3.1 of paper
-    # Use cv2.findChessboardCorners to find the corners of the checker baord with appropiate parameters
+    """
+    Solve for approximate K (camera calibration matrix)
+    Section 3.1 of paper
+    Use cv2.findChessboardCorners to find the corners of the checker baord with appropiate parameters
+    """
     four_corners_world = np.array([corners_world[0][0], corners_world[0][w-1], corners_world[h-1][0], corners_world[h-1][w-1]]).reshape(-1, 2)
     homographies = []
 
@@ -147,12 +153,14 @@ def get_intrinsic(corners_image, corners_world):
     
     return K, homographies, l
 
-"""
-Approximate R (rotation matrix) or t (translation of the camera)
-section 3.1
-neglect conversion from normal matrix to rotation matrix
-"""
+
 def get_extrinsics(homographies, imgs, K, l):
+    """
+    Approximate R (rotation matrix) or t (translation of the camera)
+    section 3.1
+    neglect conversion from normal matrix to rotation matrix
+    """
+
     # imshow rectified image
     pixels_per_mm = 5  # choose something reasonable
     rect_w = int((w - 1) * sq_sz * pixels_per_mm)
@@ -189,18 +197,21 @@ def get_extrinsics(homographies, imgs, K, l):
         # Rectification:
         H_rect = T @ np.linalg.inv(homography)
         warped = cv2.warpPerspective(imgs[index], H_rect, (rect_w, rect_h))
+        cv2.imwrite(os.path.join("../Figures/Rectification" , f'rectification-{index}.jpg'), warped)
         # cv2.imshow(f"rectification for image {index}", warped)
         # cv2.waitKey(0)
         # cv2.destroyAllWindows() 
     return extrinsics
 
-"""
-This function is supposed to convert the world points into each of the images coordinates
-@param corners_image
-@param corners_world
-@return corners in the image
-"""
+
 def project_points(params, corners_world, corners_image, residual: bool):
+    """
+    This function is supposed to convert the world points into each of the images coordinates
+    @param corners_image
+    @param corners_world
+    @return corners in the image if you are not looking for a residual, otherwise, return the residual for optimization
+    """
+
     global iteration_count
     iteration_count += 1
 
@@ -242,7 +253,7 @@ def project_points(params, corners_world, corners_image, residual: bool):
         return world_in_image
 
     # Calculate the loss
-    # loss_list is a list of length 13 with 54 (2-coordinate) points
+    # loss_list is a list of length 13 with 54 (2-coordinate) points per element
     loss_list = [(a - b).flatten() for a, b in zip(corners_image, world_in_image)]
     residuals = np.concatenate(loss_list)
 
@@ -255,6 +266,13 @@ def project_points(params, corners_world, corners_image, residual: bool):
 
 
 def pack_parameters(K, k, extrinsics):
+    """
+    This function takes the parameters and packs them into a single np.array. This is necessary for the optimization
+    :param K: Intrinsic Matrix
+    :param k: Distortion
+    :param extrinsics: Camera extrinsics
+    """
+    
     params = []
     
     fx = K[0][0]
@@ -284,7 +302,13 @@ def pack_parameters(K, k, extrinsics):
 
     return np.array(params)
 
+
 def unpack_parameters(params: np.ndarray):
+    """
+    Opposite of pack_parameters, take the camera information and separate them, makes it easier for project_points to perform its operations
+
+    :param params: np.array with K, k and the extrinsics
+    """
     K = np.array([
         [params[0], params[2], params[3]],
         [0, params[1], params[4]],
@@ -310,6 +334,7 @@ def unpack_parameters(params: np.ndarray):
 
 def main():
     global iteration_count
+
     # get path to current directory
     curr_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(curr_dir)
@@ -352,13 +377,7 @@ def main():
     # section 3.3
     # rotate the real "world" points into the camera's orientation
     
-    # pack all of the parameters into one vector
-    # Global ones: fx, fy, cx, cy, k1, k2
-    # Local ones: r11, r12, r13, t11, t12, t13, r21, r22, r23, t21, t22, t23
-    # Compute reprojection errors
-
-    # The extrinsics are not optimized, becaue they are independent for each fotograph
-    # Compute initial error
+    # Compute initial error for comparison
     print("Computing initial reprojection error...")
     initial_params = pack_parameters(K, k, extrinsics)
     initial_residuals = project_points(initial_params, world2D, corners2D, residual=True)
@@ -369,17 +388,13 @@ def main():
     iteration_count = 0
     
     print("="*60)
-    print("STARTING NON-LINEAR OPTIMIZATION")
-    print("="*60)
-    print("This may take a few minutes...\n")
-
+    print("STARTING NON-LINEAR OPTIMIZATION: ")
 
     result = scipy.optimize.least_squares(project_points, 
                                           initial_params, 
                                           args=(world2D, corners2D, True), 
                                           method="lm")
     
-    print("\n" + "="*60)
     print("OPTIMIZATION COMPLETE")
     print("="*60)
     
@@ -404,11 +419,8 @@ def main():
     
     print("\n" + "="*60)
     print("Generating visualizations...")
-    print("="*60 + "\n")
 
-
-    # input_vector = [K, R, k]
-    # make a function that takes world points and puts them onto every image
+    # world in image is the world points projected onto the distorted images
     world_in_image = project_points(final_params, world2D, corners2D, residual=False)
 
     # Visualization of World Points Projection
@@ -423,11 +435,17 @@ def main():
         projected_x = world_in_image[index][:, 0]
         projected_y = world_in_image[index][:, 1]
         ax.scatter(projected_x, projected_y, c='red', s=30, marker='x', label='Projected World to Image')
+        
+        # calculate the Reprojection Error for each image
+        sq_diff = (corners2D[index] - world_in_image[index]) ** 2
+        mse = np.mean(sq_diff)
+        rms = np.sqrt(mse)
 
         ax.legend()
-        ax.set_title('World Points projected onto images')
-        plt.show()
-
+        ax.set_axis_off()
+        ax.set_title(f'World Points projected onto Image {index}, \n Reprojection Error = {rms}')
+        plt.savefig(f"../Figures/Reprojection/reprojection-{index}")
+        # plt.show()
 
 
 if __name__ == "__main__":
