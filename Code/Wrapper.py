@@ -168,8 +168,15 @@ def get_extrinsics(homographies, imgs, K, l):
 
         r1 = l * np.linalg.inv(K) @ h1_2
         r2 = l * np.linalg.inv(K) @ h2_2
-        r3 = np.cross(r1, r2)
         t = l * np.linalg.inv(K) @ h3_2
+
+        # normalize properly
+        norm = 1.0 / np.linalg.norm(r1)
+
+        r1 = norm * r1
+        r2 = norm * r2
+        t  = norm * t
+        r3 = np.cross(r1, r2)
 
         # print("r1", r1)
         # print("r2", r2)
