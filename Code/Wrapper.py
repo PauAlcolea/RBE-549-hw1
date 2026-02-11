@@ -5,11 +5,14 @@ from argparse import ArgumentParser
 import os
 import cv2
 import matplotlib.pyplot as plt
+import scipy.optimize
 
 # Some global variables
 sq_sz = 21.5
 h = 6
 w = 9
+
+iteration_count = 0
 
 """
 This function will load the 13 data images
@@ -190,7 +193,12 @@ This function is supposed to convert the world points into each of the images co
 @param corners_world
 @return corners in the image
 """
-def project_points(corners_world, K, extrinsics, k):
+def project_points(params, corners_world, corners_image, residual: bool):
+    global iteration_count
+    iteration_count += 1
+
+    K, k, extrinsics = unpack_parameters(params)
+
     # make the points in 3d to add the z
     world_points_3d = np.column_stack([corners_world, np.zeros(len(corners_world))])
     world_in_image = []
@@ -222,9 +230,79 @@ def project_points(corners_world, K, extrinsics, k):
             
             projected_points[ind] = [u, v]
         world_in_image.append(projected_points)
-    return world_in_image
+
+    if not residual:
+        return world_in_image
+
+    # Calculate the loss
+    # loss_list is a list of length 13 with 54 (2-coordinate) points
+    loss_list = [(a - b).flatten() for a, b in zip(corners_image, world_in_image)]
+    residuals = np.concatenate(loss_list)
+
+    # print progress every 10 iterations
+    if iteration_count % 100 == 0:
+        rms_error = np.sqrt(np.mean(residuals**2))
+        print(f"Iteration {iteration_count}: RMS error = {rms_error:.4f} pixels")
+    
+    return residuals
+
+
+def pack_parameters(K, k, extrinsics):
+    params = []
+    
+    fx = K[0][0]
+    fy = K[1][1]
+    gamma = K[0][1]
+    cx = K[0][2]
+    cy = K[1][2]
+    k1 = k[0]
+    k2 = k[1]
+    
+    params.extend([fx, fy, gamma, cx, cy])
+    params.extend([k1, k2])
+
+    # For every image's extrinsics
+    for Rt in extrinsics:
+        R = Rt[:,0:3]
+        t = Rt[:, 3]
+
+        # Rodrigues vectors to represent a whole Rotation matrix with only three parameters instead of 9, Rotation as an axis and an angle
+        # The following constraints lead to three degrees of freedom
+        # R.T @ R = I
+        # det(R) = 1
+        # r = theta*[axis]
+        rvec, jacobian = cv2.Rodrigues(R)
+        params.extend(rvec.flatten())
+        params.extend(t)
+
+    return np.array(params)
+
+def unpack_parameters(params: np.ndarray):
+    K = np.array([
+        [params[0], params[2], params[3]],
+        [0, params[1], params[4]],
+        [0, 0, 1]
+    ])
+    k = np.array([params[5], params[6]])
+
+    extrinsics = []
+    ind = 7
+    while ind < len(params):
+        rvec = params[ind:ind+3]
+        t = params[ind+3:ind+6]
+
+        # Rodrigues back to R matrix
+        R, _ = cv2.Rodrigues(rvec)
+
+        Rt = np.column_stack([R, t])
+        extrinsics.append(Rt)
+        ind += 6
+
+    return K, k, extrinsics
+
 
 def main():
+    global iteration_count
     # get path to current directory
     curr_dir = os.path.dirname(os.path.abspath(__file__))
     parent_dir = os.path.dirname(curr_dir)
@@ -272,11 +350,63 @@ def main():
     # Local ones: r11, r12, r13, t11, t12, t13, r21, r22, r23, t21, t22, t23
     # Compute reprojection errors
 
+    # The extrinsics are not optimized, becaue they are independent for each fotograph
+    # Compute initial error
+    print("Computing initial reprojection error...")
+    initial_params = pack_parameters(K, k, extrinsics)
+    initial_residuals = project_points(initial_params, world2D, corners2D, residual=True)
+    initial_rms = np.sqrt(np.mean(initial_residuals**2))
+    print(f"Initial RMS reprojection error: {initial_rms:.4f} pixels\n")
+
+    # Reset iteration counter for optimization
+    iteration_count = 0
+    
+    print("="*60)
+    print("STARTING NON-LINEAR OPTIMIZATION")
+    print("="*60)
+    print("This may take a few minutes...\n")
+
+
+    result = scipy.optimize.least_squares(project_points, 
+                                          initial_params, 
+                                          args=(world2D, corners2D, True), 
+                                          method="lm",
+                                          ftol=1e-6,        #cost change
+                                          max_nfev=20000)   #maximun number of iterations
+    
+    print("\n" + "="*60)
+    print("OPTIMIZATION COMPLETE")
+    print("="*60)
+    
+    final_params = result.x
+    K_final, k_final, extrinsics_final = unpack_parameters(final_params)
+
+    final_residuals = project_points(final_params, world2D, corners2D, residual=True)
+    final_rms = np.sqrt(np.mean(final_residuals**2))
+    
+    print(f"\nFinal Results:")
+    print(f"  Initial RMS error: {initial_rms:.4f} pixels")
+    print(f"  Final RMS error:   {final_rms:.4f} pixels")
+    print(f"  Improvement:       {initial_rms - final_rms:.4f} pixels")
+    print(f"  Total iterations:  {iteration_count}")
+    
+    print(f"\nOptimized Intrinsic Matrix K:")
+    print(K_final)
+    print(f"\nFocal lengths:  fx = {K_final[0,0]:.2f}, fy = {K_final[1,1]:.2f}")
+    print(f"Principal point: cx = {K_final[0,2]:.2f}, cy = {K_final[1,2]:.2f}")
+    print(f"Aspect ratio:    fx/fy = {K_final[0,0]/K_final[1,1]:.6f}")
+    print(f"\nDistortion coefficients: k = [{k_final[0]:.6f}, {k_final[1]:.6f}]")
+    
+    print("\n" + "="*60)
+    print("Generating visualizations...")
+    print("="*60 + "\n")
+
+
     # input_vector = [K, R, k]
     # make a function that takes world points and puts them onto every image
-    world_in_image = project_points(world2D, K, extrinsics, k)
-    loss_list = [(a - b) for a, b in zip(corners2D, world_in_image)]
+    world_in_image = project_points(final_params, world2D, corners2D, residual=False)
 
+    # Visualization of World Points Projection
     for index, im in enumerate(imgs):
         # Visualize first image
         fig, ax = plt.subplots(1, 1, figsize=(10, 8))
