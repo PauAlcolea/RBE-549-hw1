@@ -6,6 +6,7 @@ import os
 import cv2
 import matplotlib.pyplot as plt
 
+# Some global variables
 sq_sz = 21.5
 h = 6
 w = 9
@@ -195,7 +196,7 @@ def project_points(corners_world, K, extrinsics, k):
     world_in_image = []
     for Rt in extrinsics:
         R = Rt[:,0:3]
-        t = Rt[:, -1]
+        t = Rt[:, 3]
 
         projected_points = np.empty((len(corners_world), 2))
 
@@ -209,7 +210,8 @@ def project_points(corners_world, K, extrinsics, k):
 
             # radial distortion
             k1, k2 = k[0], k[1]
-            rad = k1 * ((x_norm ** 2) + (y_norm ** 2)) + k2 * (((x_norm ** 2) + (y_norm ** 2))**2)
+            r2 = (x_norm ** 2) + (y_norm ** 2)
+            rad = 1 + k1 * r2 + k2 * (r2**2)
             x_dist = x_norm * rad
             y_dist = y_norm * rad
 
@@ -275,6 +277,21 @@ def main():
     world_in_image = project_points(world2D, K, extrinsics, k)
     loss_list = [(a - b) for a, b in zip(corners2D, world_in_image)]
 
+    for index, im in enumerate(imgs):
+        # Visualize first image
+        fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+
+        # Show the image
+        ax.imshow(im, cmap='gray')
+
+        # Plot projected corners (what your model predicts)
+        projected_x = world_in_image[index][:, 0]
+        projected_y = world_in_image[index][:, 1]
+        ax.scatter(projected_x, projected_y, c='red', s=30, marker='x', label='Projected World to Image')
+
+        ax.legend()
+        ax.set_title('World Points projected onto images')
+        plt.show()
 
 
 
